@@ -12,7 +12,7 @@ It provides a safe and convenient way to call Java code from JavaScript and call
 ![JsBridge](./JsBridgeWork.png)
 
 ## Demo
-![JsBridge Demo](https://raw.githubusercontent.com/lzyzsd/JsBridge/master/JsBridge.gif)
+![JsBridge Demo](./JsBridge.gif)
 
 ## Usage
 
