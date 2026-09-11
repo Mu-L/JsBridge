@@ -5,10 +5,8 @@ import android.content.Context;
 import android.os.Build;
 import android.os.Looper;
 import android.os.SystemClock;
-import androidx.collection.ArrayMap;
 import android.text.TextUtils;
 import android.util.AttributeSet;
-import android.webkit.WebView;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
@@ -18,32 +16,36 @@ import android.webkit.WebViewClient;
 import com.github.lzyzsd.library.BuildConfig;
 import com.google.gson.Gson;
 
-
 import org.json.JSONObject;
 
-import java.net.URLEncoder;
-
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressLint("SetJavaScriptEnabled")
 public class BridgeWebView extends WebView implements WebViewJavascriptBridge, BridgeWebViewClient.OnLoadJSListener {
 
-	private final int URL_MAX_CHARACTER_NUM=2097152;
-    private Map<String, OnBridgeCallback> mCallbacks = new ArrayMap<>();
-    private Map<String, OnBridgeCallback> mPersistentCallbacks = new ArrayMap<>();
+    private static final String TAG = "BridgeWebView";
+    private final int URL_MAX_CHARACTER_NUM = 2097152;
+    private Map<String, OnBridgeCallback> mCallbacks = new ConcurrentHashMap<>();
+    private Map<String, OnBridgeCallback> mPersistentCallbacks = new ConcurrentHashMap<>();
 
-    private List<Object> mMessages = new ArrayList<>();
+    // P1-1: Unified message model — was List<Object>
+    private List<Message> mMessages = new ArrayList<>();
 
     private BridgeWebViewClient mClient;
-
     private long mUniqueId = 0;
 
-    private boolean mJSLoaded = false;
+    // P1-2: JS injection state management (replaces boolean mJSLoaded)
+    enum JSLoadState { NOT_LOADED, LOADING, LOADED }
+    volatile JSLoadState mJSLoadState = JSLoadState.NOT_LOADED;
 
     private Gson mGson;
+
+    // P1-3: Domain whitelist configuration
+    private BridgeConfig mBridgeConfig;
 
     public BridgeWebView(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -63,10 +65,8 @@ public class BridgeWebView extends WebView implements WebViewJavascriptBridge, B
     private void init() {
         clearCache(true);
         getSettings().setUseWideViewPort(true);
-//		webView.getSettings().setLoadWithOverviewMode(true);
         getSettings().setCacheMode(WebSettings.LOAD_NO_CACHE);
         getSettings().setJavaScriptEnabled(true);
-//        mContent.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
         getSettings().setJavaScriptCanOpenWindowsAutomatically(true);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT && BuildConfig.DEBUG) {
             WebView.setWebContentsDebuggingEnabled(true);
@@ -80,7 +80,7 @@ public class BridgeWebView extends WebView implements WebViewJavascriptBridge, B
     }
 
     public boolean isJSLoaded() {
-        return mJSLoaded;
+        return mJSLoadState == JSLoadState.LOADED;
     }
 
     public Map<String, OnBridgeCallback> getCallbacks() {
@@ -91,26 +91,63 @@ public class BridgeWebView extends WebView implements WebViewJavascriptBridge, B
         return mPersistentCallbacks;
     }
 
+    // --- P1-3: Domain whitelist API ---
+
+    public void setBridgeConfig(BridgeConfig config) {
+        mBridgeConfig = config;
+    }
+
+    public BridgeConfig getBridgeConfig() {
+        return mBridgeConfig;
+    }
+
+    /**
+     * Set allowed hosts for the bridge. Only pages from these hosts can call
+     * native methods. Pass null or empty to allow all (default).
+     */
+    public void setAllowedHosts(Set<String> hosts) {
+        if (mBridgeConfig == null) {
+            mBridgeConfig = new BridgeConfig();
+        }
+        mBridgeConfig.setAllowedHosts(hosts);
+    }
+
+    /**
+     * Add a single allowed host (e.g. "example.com" or "*.example.com").
+     */
+    public void addAllowedHost(String host) {
+        if (mBridgeConfig == null) {
+            mBridgeConfig = new BridgeConfig();
+        }
+        mBridgeConfig.addAllowedHost(host);
+    }
+
     @Override
     public void setWebViewClient(WebViewClient client) {
         mClient.setWebViewClient(client);
     }
 
+    // --- P1-2: JS injection state callbacks ---
+
     @Override
-    public void onLoadStart() {
-        mJSLoaded = false;
+    public void onPageReset() {
+        mJSLoadState = JSLoadState.NOT_LOADED;
+        // Restore message queue so messages sent before JS is ready are queued
+        mMessages = new ArrayList<>();
     }
 
     @Override
-    public void onLoadFinished() {
-        mJSLoaded = true;
+    public void onJSInjected() {
+        mJSLoadState = JSLoadState.LOADED;
         if (mMessages != null) {
-            for (Object message : mMessages) {
+            for (Message message : mMessages) {
                 dispatchMessage(message);
             }
             mMessages = null;
         }
     }
+
+    // --- WebViewJavascriptBridge implementation ---
 
     @Override
     public void sendToWeb(String data) {
@@ -124,11 +161,6 @@ public class BridgeWebView extends WebView implements WebViewJavascriptBridge, B
 
     /**
      * call javascript registered handler
-     * 调用javascript处理程序注册
-     *
-     * @param handlerName handlerName
-     * @param data        data
-     * @param callBack    OnBridgeCallback
      */
     public void callHandler(String handlerName, String data, OnBridgeCallback callBack) {
         doSend(handlerName, data, callBack);
@@ -136,20 +168,13 @@ public class BridgeWebView extends WebView implements WebViewJavascriptBridge, B
 
     /**
      * call javascript registered handler with persistent callback
-     * 调用javascript处理程序注册，使用持久回调
-     *
-     * @param handlerName handlerName
-     * @param data        data
-     * @param callBack    OnBridgeCallback (will be persistent and reusable)
      */
     public void callHandlerPersistent(String handlerName, String data, OnBridgeCallback callBack) {
         doSendPersistent(handlerName, data, callBack);
     }
 
-
     @Override
     public void sendToWeb(String function, Object... values) {
-        // 必须要找主线程才会将数据传递出去 --- 划重点
         if (Thread.currentThread() == Looper.getMainLooper().getThread()) {
             String jsCommand = String.format(function, values);
             jsCommand = String.format(BridgeUtil.JAVASCRIPT_STR, jsCommand);
@@ -159,68 +184,51 @@ public class BridgeWebView extends WebView implements WebViewJavascriptBridge, B
 
     @Override
     public void responseFromWeb(String data, String callbackId) {
-        sendResponse(data,callbackId);
+        sendResponse(data, callbackId);
     }
 
-    /**
-     * 保存message到消息队列
-     *
-     * @param handlerName      handlerName
-     * @param data             data
-     * @param responseCallback OnBridgeCallback
-     */
+    // --- P1-1: Unified message model (Message replaces JSRequest/JSResponse) ---
+
     private void doSend(String handlerName, Object data, OnBridgeCallback responseCallback) {
-        if (!(data instanceof String) && mGson == null){
+        if (!(data instanceof String) && mGson == null) {
             return;
         }
-        JSRequest request = new JSRequest();
-        if (data != null) {
-            request.data = data instanceof String ? (String) data : mGson.toJson(data);
-        }
+        String dataStr = data instanceof String ? (String) data : mGson.toJson(data);
+        String callbackId = null;
         if (responseCallback != null) {
-            String callbackId = String.format(BridgeUtil.CALLBACK_ID_FORMAT, (++mUniqueId) + (BridgeUtil.UNDERLINE_STR + SystemClock.currentThreadTimeMillis()));
+            callbackId = String.format(BridgeUtil.CALLBACK_ID_FORMAT,
+                    (++mUniqueId) + (BridgeUtil.UNDERLINE_STR + SystemClock.currentThreadTimeMillis()));
             mCallbacks.put(callbackId, responseCallback);
-            request.callbackId = callbackId;
         }
-        if (!TextUtils.isEmpty(handlerName)) {
-            request.handlerName = handlerName;
-        }
-        queueMessage(request);
+        Message message = Message.createRequest(
+                TextUtils.isEmpty(handlerName) ? null : handlerName,
+                dataStr,
+                callbackId
+        );
+        queueMessage(message);
     }
 
-    /**
-     * 保存message到消息队列，使用持久回调
-     *
-     * @param handlerName      handlerName
-     * @param data             data
-     * @param responseCallback OnBridgeCallback (persistent)
-     */
     private void doSendPersistent(String handlerName, Object data, OnBridgeCallback responseCallback) {
-        if (!(data instanceof String) && mGson == null){
+        if (!(data instanceof String) && mGson == null) {
             return;
         }
-        JSRequest request = new JSRequest();
-        if (data != null) {
-            request.data = data instanceof String ? (String) data : mGson.toJson(data);
-        }
+        String dataStr = data instanceof String ? (String) data : mGson.toJson(data);
+        String callbackId = null;
         if (responseCallback != null) {
-            String callbackId = String.format(BridgeUtil.CALLBACK_ID_FORMAT, (++mUniqueId) + (BridgeUtil.UNDERLINE_STR + SystemClock.currentThreadTimeMillis()));
+            callbackId = String.format(BridgeUtil.CALLBACK_ID_FORMAT,
+                    (++mUniqueId) + (BridgeUtil.UNDERLINE_STR + SystemClock.currentThreadTimeMillis()));
             mCallbacks.put(callbackId, responseCallback);
             mPersistentCallbacks.put(callbackId, responseCallback);
-            request.callbackId = callbackId;
         }
-        if (!TextUtils.isEmpty(handlerName)) {
-            request.handlerName = handlerName;
-        }
-        queueMessage(request);
+        Message message = Message.createRequest(
+                TextUtils.isEmpty(handlerName) ? null : handlerName,
+                dataStr,
+                callbackId
+        );
+        queueMessage(message);
     }
 
-    /**
-     * list<message> != null 添加到消息集合否则分发消息
-     *
-     * @param message Message
-     */
-    private void queueMessage(Object message) {
+    private void queueMessage(Message message) {
         if (mMessages != null) {
             mMessages.add(message);
         } else {
@@ -229,41 +237,32 @@ public class BridgeWebView extends WebView implements WebViewJavascriptBridge, B
     }
 
     /**
-     * 分发message 必须在主线程才分发成功
-     *
-     * @param message Message
+     * Dispatch a message to JS. Uses Message.toJson() directly — no Gson dependency.
      */
-    private void dispatchMessage(Object message) {
-        if (mGson == null){
-            return;
-        }
-        String messageJson = mGson.toJson(message);
-        //escape special characters for json string  为json字符串转义特殊字符
-
-		  // 系统原生 API 做 Json转义，没必要自己正则替换，而且替换不一定完整
+    private void dispatchMessage(Message message) {
+        String messageJson = message.toJson();
         messageJson = JSONObject.quote(messageJson);
         String javascriptCommand = String.format(BridgeUtil.JS_HANDLE_MESSAGE_FROM_JAVA, messageJson);
-        // 必须要找主线程才会将数据传递出去 --- 划重点
         if (Thread.currentThread() == Looper.getMainLooper().getThread()) {
-			if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT&&javascriptCommand.length()>=URL_MAX_CHARACTER_NUM) {
-				this.evaluateJavascript(javascriptCommand,null);
-			}else {
-				this.loadUrl(javascriptCommand);
-			}
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT
+                    && javascriptCommand.length() >= URL_MAX_CHARACTER_NUM) {
+                this.evaluateJavascript(javascriptCommand, null);
+            } else {
+                this.loadUrl(javascriptCommand);
+            }
         }
     }
 
     public void sendResponse(Object data, String callbackId) {
-        if (!(data instanceof String) && mGson == null){
+        if (!(data instanceof String) && mGson == null) {
             return;
         }
         if (!TextUtils.isEmpty(callbackId)) {
-            final JSResponse response = new JSResponse();
-            response.responseId = callbackId;
-            response.responseData = data instanceof String ? (String) data : mGson.toJson(data);
-            if (Thread.currentThread() == Looper.getMainLooper().getThread()){
+            String responseData = data instanceof String ? (String) data : mGson.toJson(data);
+            final Message response = Message.createResponse(callbackId, responseData);
+            if (Thread.currentThread() == Looper.getMainLooper().getThread()) {
                 dispatchMessage(response);
-            }else {
+            } else {
                 post(new Runnable() {
                     @Override
                     public void run() {
@@ -281,29 +280,65 @@ public class BridgeWebView extends WebView implements WebViewJavascriptBridge, B
         mPersistentCallbacks.clear();
     }
 
+    // --- P1-3: BaseJavascriptInterface with origin check ---
+
     public static abstract class BaseJavascriptInterface {
 
         private Map<String, OnBridgeCallback> mCallbacks;
         private Map<String, OnBridgeCallback> mPersistentCallbacks;
+        private BridgeConfig mBridgeConfig;
+        private WebView mWebView;
 
         public BaseJavascriptInterface(Map<String, OnBridgeCallback> callbacks) {
-            mCallbacks = callbacks;
+            this(callbacks, null, null, null);
         }
 
-        public BaseJavascriptInterface(Map<String, OnBridgeCallback> callbacks, Map<String, OnBridgeCallback> persistentCallbacks) {
+        public BaseJavascriptInterface(Map<String, OnBridgeCallback> callbacks,
+                                       Map<String, OnBridgeCallback> persistentCallbacks) {
+            this(callbacks, persistentCallbacks, null, null);
+        }
+
+        /**
+         * Constructor with domain whitelist support.
+         *
+         * @param callbacks           callback map
+         * @param persistentCallbacks persistent callback map (nullable)
+         * @param bridgeConfig        bridge config with allowed hosts (nullable = allow all)
+         * @param webView             the WebView, used to read the current URL for origin checks
+         */
+        public BaseJavascriptInterface(Map<String, OnBridgeCallback> callbacks,
+                                       Map<String, OnBridgeCallback> persistentCallbacks,
+                                       BridgeConfig bridgeConfig,
+                                       WebView webView) {
             mCallbacks = callbacks;
             mPersistentCallbacks = persistentCallbacks;
+            mBridgeConfig = bridgeConfig;
+            mWebView = webView;
+        }
+
+        private boolean isOriginAllowed() {
+            if (mBridgeConfig == null) return true;
+            String url = (mWebView != null) ? mWebView.getUrl() : null;
+            return mBridgeConfig.isUrlAllowed(url);
         }
 
         @JavascriptInterface
         public String send(String data, String callbackId) {
-            Log.d("BaseJavascriptInterface", data + ", callbackId: " + callbackId + " " + Thread.currentThread().getName());
+            if (!isOriginAllowed()) {
+                Log.w(TAG, "Bridge send blocked: origin not in allowed hosts");
+                return "";
+            }
+            Log.d(TAG, data + ", callbackId: " + callbackId + " " + Thread.currentThread().getName());
             return send(data);
         }
 
         @JavascriptInterface
         public void response(String data, String responseId) {
-            Log.d("BaseJavascriptInterface", data + ", responseId: " + responseId + " " + Thread.currentThread().getName());
+            if (!isOriginAllowed()) {
+                Log.w(TAG, "Bridge response blocked: origin not in allowed hosts");
+                return;
+            }
+            Log.d(TAG, data + ", responseId: " + responseId + " " + Thread.currentThread().getName());
             if (!TextUtils.isEmpty(responseId)) {
                 OnBridgeCallback function = mCallbacks.get(responseId);
                 if (function != null) {
@@ -317,6 +352,7 @@ public class BridgeWebView extends WebView implements WebViewJavascriptBridge, B
         }
 
         public abstract String send(String data);
-    }
 
+        private static final String TAG = "BaseJavascriptInterface";
+    }
 }

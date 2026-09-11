@@ -12,6 +12,36 @@ public class Message {
     public String data;
     public String handlerName;
 
+    /**
+     * Create a request message to send to JS.
+     *
+     * @param handlerName JS handler name (nullable)
+     * @param data        data payload (nullable)
+     * @param callbackId  callback ID for response (nullable)
+     * @return a new Message configured as a request
+     */
+    public static Message createRequest(String handlerName, String data, String callbackId) {
+        Message m = new Message();
+        m.handlerName = handlerName;
+        m.data = data;
+        m.callbackId = callbackId;
+        return m;
+    }
+
+    /**
+     * Create a response message to send back to JS.
+     *
+     * @param responseId   the original callback ID this is responding to
+     * @param responseData the response payload
+     * @return a new Message configured as a response
+     */
+    public static Message createResponse(String responseId, String responseData) {
+        Message m = new Message();
+        m.responseId = responseId;
+        m.responseData = responseData;
+        return m;
+    }
+
     public static List<Message> toArrayList(String data) {
         return new Gson().fromJson(data, new TypeToken<List<Message>>(){}.getType());
     }

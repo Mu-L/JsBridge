@@ -55,6 +55,12 @@ public class CustomWebView extends WebView implements WebViewJavascriptBridge, I
         bridgeHelper = new BridgeHelper(this);
         this.setWebViewClient(new WebViewClient() {
             @Override
+            public void onPageStarted(WebView webView, String url, android.graphics.Bitmap favicon) {
+                super.onPageStarted(webView, url, favicon);
+                bridgeHelper.onPageStarted();
+            }
+
+            @Override
             public void onPageFinished(WebView webView, String s) {
                 bridgeHelper.onPageFinished();
             }

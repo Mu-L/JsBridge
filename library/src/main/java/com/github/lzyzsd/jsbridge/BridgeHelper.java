@@ -1,9 +1,11 @@
 package com.github.lzyzsd.jsbridge;
 
+import android.os.Build;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.text.TextUtils;
 import android.util.Log;
+import android.webkit.ValueCallback;
 
 import com.google.gson.Gson;
 
@@ -12,9 +14,10 @@ import org.json.JSONObject;
 import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * JsBridge辅助类,帮助集成JsBridge功能.
@@ -27,26 +30,56 @@ public class BridgeHelper implements WebViewJavascriptBridge {
     private static final String TAG = "BridgeHelper";
 
     private static final String BRIDGE_JS = "WebViewJavascriptBridge.js";
-    private Map<String, OnBridgeCallback> responseCallbacks = new HashMap<>();
-    private Map<String, BridgeHandler> messageHandlers = new HashMap<>();
+    private Map<String, OnBridgeCallback> responseCallbacks = new ConcurrentHashMap<>();
+    private Map<String, BridgeHandler> messageHandlers = new ConcurrentHashMap<>();
     private BridgeHandler defaultHandler = new DefaultHandler();
 
     private List<Message> startupMessage = new ArrayList<>();
-
-    private List<Message> getStartupMessage() {
-        return startupMessage;
-    }
-
-    private void setStartupMessage(List<Message> startupMessage) {
-        this.startupMessage = startupMessage;
-    }
 
     private long uniqueId = 0;
 
     private IWebView webView;
 
+    // P1-2: Guard against duplicate JS injection
+    private boolean mInjecting = false;
+
+    // P1-3: Domain whitelist
+    private BridgeConfig bridgeConfig;
+
     public BridgeHelper(IWebView webView) {
         this.webView = webView;
+    }
+
+    // PLACEHOLDER_REST
+
+    // --- P1-3: Domain whitelist API ---
+
+    public void setBridgeConfig(BridgeConfig config) {
+        this.bridgeConfig = config;
+    }
+
+    public BridgeConfig getBridgeConfig() {
+        return bridgeConfig;
+    }
+
+    public void setAllowedHosts(Set<String> hosts) {
+        if (bridgeConfig == null) {
+            bridgeConfig = new BridgeConfig();
+        }
+        bridgeConfig.setAllowedHosts(hosts);
+    }
+
+    public void addAllowedHost(String host) {
+        if (bridgeConfig == null) {
+            bridgeConfig = new BridgeConfig();
+        }
+        bridgeConfig.addAllowedHost(host);
+    }
+
+    private boolean isOriginAllowed() {
+        if (bridgeConfig == null) return true;
+        String url = webView.getWebView().getUrl();
+        return bridgeConfig.isUrlAllowed(url);
     }
 
     /**
@@ -59,8 +92,6 @@ public class BridgeHelper implements WebViewJavascriptBridge {
 
     /**
      * 获取到CallBackFunction data执行调用并且从数据集移除
-     *
-     * @param url
      */
     private void handlerReturnData(String url) {
         String functionName = BridgeUtil.getFunctionFromReturnUrl(url);
@@ -74,10 +105,6 @@ public class BridgeHelper implements WebViewJavascriptBridge {
 
     /**
      * 保存message到消息队列
-     *
-     * @param handlerName      handlerName
-     * @param data             data
-     * @param responseCallback CallBackFunction
      */
     private void doSend(String handlerName, String data, OnBridgeCallback responseCallback) {
         Message m = new Message();
@@ -85,7 +112,8 @@ public class BridgeHelper implements WebViewJavascriptBridge {
             m.setData(data);
         }
         if (responseCallback != null) {
-            String callbackStr = String.format(BridgeUtil.CALLBACK_ID_FORMAT, ++uniqueId + (BridgeUtil.UNDERLINE_STR + SystemClock.currentThreadTimeMillis()));
+            String callbackStr = String.format(BridgeUtil.CALLBACK_ID_FORMAT,
+                    ++uniqueId + (BridgeUtil.UNDERLINE_STR + SystemClock.currentThreadTimeMillis()));
             responseCallbacks.put(callbackStr, responseCallback);
             m.setCallbackId(callbackStr);
         }
@@ -95,11 +123,6 @@ public class BridgeHelper implements WebViewJavascriptBridge {
         queueMessage(m);
     }
 
-    /**
-     * list<message> != null 添加到消息集合否则分发消息
-     *
-     * @param m Message
-     */
     private void queueMessage(Message m) {
         if (startupMessage != null) {
             startupMessage.add(m);
@@ -110,16 +133,11 @@ public class BridgeHelper implements WebViewJavascriptBridge {
 
     /**
      * 分发message 必须在主线程才分发成功
-     *
-     * @param m Message
      */
     private void dispatchMessage(Message m) {
         String messageJson = m.toJson();
-        //escape special characters for json string  为json字符串转义特殊字符
-        //系统原生API做Json转义替换手动转义，解决js解析数据格式报错
         messageJson = JSONObject.quote(messageJson);
         String javascriptCommand = String.format(BridgeUtil.JS_HANDLE_MESSAGE_FROM_JAVA, messageJson);
-        // 必须要找主线程才会将数据传递出去 --- 划重点
         if (Thread.currentThread() == Looper.getMainLooper().getThread()) {
             this.loadUrl(javascriptCommand);
         }
@@ -134,7 +152,6 @@ public class BridgeHelper implements WebViewJavascriptBridge {
 
                 @Override
                 public void onCallBack(String data) {
-                    // deserializeMessage 反序列化消息
                     List<Message> list = null;
                     try {
                         list = Message.toArrayList(data);
@@ -148,15 +165,15 @@ public class BridgeHelper implements WebViewJavascriptBridge {
                     for (int i = 0; i < list.size(); i++) {
                         Message m = list.get(i);
                         String responseId = m.getResponseId();
-                        // 是否是response  CallBackFunction
                         if (!TextUtils.isEmpty(responseId)) {
                             OnBridgeCallback function = responseCallbacks.get(responseId);
                             String responseData = m.getResponseData();
-                            function.onCallBack(responseData);
+                            if (function != null) {
+                                function.onCallBack(responseData);
+                            }
                             responseCallbacks.remove(responseId);
                         } else {
                             OnBridgeCallback responseFunction = null;
-                            // if had callbackId 如果有回调Id
                             final String callbackId = m.getCallbackId();
                             if (!TextUtils.isEmpty(callbackId)) {
                                 responseFunction = new OnBridgeCallback() {
@@ -176,7 +193,6 @@ public class BridgeHelper implements WebViewJavascriptBridge {
                                     }
                                 };
                             }
-                            // BridgeHandler执行
                             BridgeHandler handler;
                             if (!TextUtils.isEmpty(m.getHandlerName())) {
                                 handler = messageHandlers.get(m.getHandlerName());
@@ -195,7 +211,6 @@ public class BridgeHelper implements WebViewJavascriptBridge {
 
     private void loadUrl(String jsUrl, OnBridgeCallback returnCallback) {
         this.loadUrl(jsUrl);
-        // 添加至 Map<String, CallBackFunction>
         responseCallbacks.put(BridgeUtil.parseFunctionName(jsUrl), returnCallback);
     }
 
@@ -203,72 +218,83 @@ public class BridgeHelper implements WebViewJavascriptBridge {
         webView.loadUrl(jsUrl);
     }
 
-    /**
-     * register handler,so that javascript can call it
-     * 注册处理程序,以便javascript调用它
-     *
-     * @param handlerName handlerName
-     * @param handler     BridgeHandler
-     */
     public void registerHandler(String handlerName, BridgeHandler handler) {
         if (handler != null) {
-            // 添加至 Map<String, BridgeHandler>
             messageHandlers.put(handlerName, handler);
         }
     }
 
-    /**
-     * unregister handler
-     *
-     * @param handlerName
-     */
     public void unregisterHandler(String handlerName) {
         if (handlerName != null) {
             messageHandlers.remove(handlerName);
         }
     }
 
-    /**
-     * call javascript registered handler
-     * 调用javascript处理程序注册
-     *
-     * @param handlerName handlerName
-     * @param data        data
-     * @param callBack    CallBackFunction
-     */
     public void callHandler(String handlerName, String data, OnBridgeCallback callBack) {
         doSend(handlerName, data, callBack);
     }
 
-    public void onPageFinished() {
-        webViewLoadLocalJs();
+    // --- P1-2: Timing-safe page lifecycle ---
 
-        if (getStartupMessage() != null) {
-            for (Message m : getStartupMessage()) {
-                dispatchMessage(m);
+    /**
+     * Call when a new page starts loading. Resets injection state and restores
+     * the message queue so messages are queued until JS is injected again.
+     */
+    public void onPageStarted() {
+        mInjecting = false;
+        startupMessage = new ArrayList<>();
+    }
+
+    /**
+     * Call when the page finishes loading. Injects the bridge JS using
+     * evaluateJavascript (with a completion callback) and then flushes
+     * queued messages only after injection is confirmed.
+     */
+    public void onPageFinished() {
+        if (mInjecting) return; // debounce multiple onPageFinished calls
+        mInjecting = true;
+
+        String jsContent = BridgeUtil.assetFile2Str(webView.getContext(), BRIDGE_JS);
+        if (jsContent != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            webView.getWebView().evaluateJavascript(jsContent, new ValueCallback<String>() {
+                @Override
+                public void onReceiveValue(String value) {
+                    flushStartupMessages();
+                }
+            });
+        } else {
+            // Fallback for API < 19
+            if (jsContent != null) {
+                loadUrl("javascript:" + jsContent);
             }
-            setStartupMessage(null);
+            flushStartupMessages();
         }
     }
 
-    private void webViewLoadLocalJs() {
-        String jsContent = BridgeUtil.assetFile2Str(webView.getContext(), BridgeHelper.BRIDGE_JS);
-        loadUrl("javascript:" + jsContent);
+    private void flushStartupMessages() {
+        if (startupMessage != null) {
+            for (Message m : startupMessage) {
+                dispatchMessage(m);
+            }
+            startupMessage = null;
+        }
     }
 
+    // P1-3: Origin check in URL interception
     public boolean shouldOverrideUrlLoading(String url) {
         try {
-            // decode 之前，处理 % 和 +
             String replacedUrl = url.replaceAll("%(?![0-9a-fA-F]{2})", "%25").replaceAll("\\+", "%2B");
             url = URLDecoder.decode(replacedUrl, "UTF-8");
         } catch (UnsupportedEncodingException e) {
             Log.w(TAG, e);
         }
 
-        if (url.startsWith(BridgeUtil.YY_RETURN_DATA)) { // 如果是返回数据
+        if (url.startsWith(BridgeUtil.YY_RETURN_DATA)) {
+            if (!isOriginAllowed()) return true; // block silently
             handlerReturnData(url);
             return true;
-        } else if (url.startsWith(BridgeUtil.YY_OVERRIDE_SCHEMA)) { //
+        } else if (url.startsWith(BridgeUtil.YY_OVERRIDE_SCHEMA)) {
+            if (!isOriginAllowed()) return true; // block silently
             flushMessageQueue();
             return true;
         }
@@ -299,9 +325,9 @@ public class BridgeHelper implements WebViewJavascriptBridge {
             final Message response = new Message();
             response.responseId = callbackId;
             response.responseData = data instanceof String ? (String) data : new Gson().toJson(data);
-            if (Thread.currentThread() == Looper.getMainLooper().getThread()){
+            if (Thread.currentThread() == Looper.getMainLooper().getThread()) {
                 dispatchMessage(response);
-            }else {
+            } else {
                 webView.getWebView().post(new Runnable() {
                     @Override
                     public void run() {
@@ -314,11 +340,15 @@ public class BridgeHelper implements WebViewJavascriptBridge {
 
     @Override
     public void responseFromWeb(String data, String callbackId) {
-        sendResponse(data,callbackId);
+        sendResponse(data, callbackId);
     }
 
     public Map<String, OnBridgeCallback> getCallbacks() {
         return responseCallbacks;
     }
 
+    // Visible for testing
+    List<Message> getStartupMessage() {
+        return startupMessage;
+    }
 }
