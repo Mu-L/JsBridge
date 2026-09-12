@@ -1,240 +1,536 @@
 # JsBridge
 
------
+Android WebView 与 JavaScript 双向通信桥接库。
 
-Inspired and modified from [this](https://github.com/jacin1/JsBridge) and WeChat jsBridge file, with some bug fixes and feature enhancements.
+A bridge between Java and JavaScript for Android WebView, providing safe bidirectional communication.
 
-This project makes a bridge between Java and JavaScript.
+[English](#english) | [中文文档](#中文文档)
 
-It provides a safe and convenient way to call Java code from JavaScript and call JavaScript code from Java.
-
-## How JsBridge Works
-![JsBridge](./JsBridgeWork.png)
+## Architecture
+![JsBridge Architecture](./JsBridgeWork.png)
 
 ## Demo
 ![JsBridge Demo](./JsBridge.gif)
 
-## Usage
+---
 
-## JitPack.io
+<a id="english"></a>
 
-I strongly recommend [JitPack.io](https://jitpack.io)
+## Installation
 
 ```groovy
+// settings.gradle or build.gradle (project level)
 repositories {
-    // ...
     maven { url "https://jitpack.io" }
 }
 
+// build.gradle (module level)
 dependencies {
-    compile 'com.github.lzyzsd:jsbridge:1.0.4'
+    implementation 'com.github.happydog-intj:JsBridge:v2.1.0'
 }
 ```
 
-## Use it in Java
+## Quick Start (BridgeWebView)
 
-Add `com.github.lzyzsd.jsbridge.BridgeWebView` to your layout, it is inherited from WebView.
+Add `BridgeWebView` to your layout:
 
-### Register a Java handler function so that JavaScript can call
-
-```java
-
-    webView.registerHandler("submitFromWeb", new BridgeHandler() {
-        @Override
-        public void handler(String data, CallBackFunction function) {
-            Log.i(TAG, "handler = submitFromWeb, data from web = " + data);
-            function.onCallBack("submitFromWeb exe, response data from Java");
-        }
-    });
-
+```xml
+<com.github.lzyzsd.jsbridge.BridgeWebView
+    android:id="@+id/webView"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent" />
 ```
 
-JavaScript can call this Java handler method "submitFromWeb" through:
+Initialize in your Activity:
+
+```java
+BridgeWebView webView = findViewById(R.id.webView);
+webView.setGson(new Gson());
+
+// Register @JavascriptInterface handler
+webView.addJavascriptInterface(
+    new MainJavascriptInterface(
+        webView.getCallbacks(),
+        webView.getPersistentCallbacks(),
+        webView),
+    "WebViewJavascriptBridge");
+
+webView.loadUrl("file:///android_asset/demo.html");
+```
+
+### Java → JavaScript
+
+Register a JS handler, then call it from Java:
 
 ```javascript
-
-    WebViewJavascriptBridge.callHandler(
-        'submitFromWeb'
-        , {'param': str1}
-        , function(responseData) {
-            document.getElementById("show").innerHTML = "send get responseData from java, data = " + responseData
-        }
-    );
-
+// JavaScript: register a handler
+WebViewJavascriptBridge.registerHandler("functionInJs", function(data, responseCallback) {
+    document.getElementById("show").innerHTML = "data from Java: = " + data;
+    responseCallback("Javascript Says Right back aka!");
+});
 ```
 
-You can set a default handler in Java, so that JavaScript can send messages to Java without an assigned handlerName
+```java
+// Java: call the JS handler
+webView.callHandler("functionInJs", new Gson().toJson(user), new OnBridgeCallback() {
+    @Override
+    public void onCallBack(String data) {
+        Log.d(TAG, "response from JS: " + data);
+    }
+});
+```
+
+### JavaScript → Java
+
+Register a `@JavascriptInterface` method, then call it from JS:
 
 ```java
+// Java: create a JavascriptInterface class
+public class MainJavascriptInterface extends BridgeWebView.BaseJavascriptInterface {
 
-    webView.setDefaultHandler(new DefaultHandler());
+    private WebViewJavascriptBridge mWebView;
 
+    public MainJavascriptInterface(Map<String, OnBridgeCallback> callbacks,
+                                   Map<String, OnBridgeCallback> persistentCallbacks,
+                                   WebViewJavascriptBridge webView) {
+        super(callbacks, persistentCallbacks);
+        mWebView = webView;
+    }
+
+    @Override
+    public String send(String data) {
+        return "default response";
+    }
+
+    @JavascriptInterface
+    public void submitFromWeb(String data, String callbackId) {
+        Log.d("JSInterface", "data from web: " + data);
+        mWebView.responseFromWeb("response from Java", callbackId);
+    }
+}
 ```
 
 ```javascript
-
-    window.WebViewJavascriptBridge.doSend(
-        data
-        , function(responseData) {
-            document.getElementById("show").innerHTML = "responseData from java, data = " + responseData
-        }
-    );
-
+// JavaScript: call the Java handler
+WebViewJavascriptBridge.callHandler(
+    'submitFromWeb',
+    {'param': 'value'},
+    function(responseData) {
+        document.getElementById("show").innerHTML = "response: " + responseData;
+    }
+);
 ```
 
-### Register a JavaScript handler function so that Java can call
+### Persistent Callbacks
 
-```javascript
-
-    WebViewJavascriptBridge.registerHandler("functionInJs", function(data, responseCallback) {
-        document.getElementById("show").innerHTML = ("data from Java: = " + data);
-        var responseData = "Javascript Says Right back aka!";
-        responseCallback(responseData);
-    });
-
-```
-
-Java can call this JavaScript handler function "functionInJs" through:
+By default, callbacks are removed after first invocation. Use persistent callbacks for multi-response scenarios (real-time updates, event streams):
 
 ```java
-
-    webView.callHandler("functionInJs", new Gson().toJson(user), new CallBackFunction() {
-        @Override
-        public void onCallBack(String data) {
-
-        }
-    });
-
-```
-You can also define a default handler using the init method, so that Java can send messages to JavaScript without an assigned handlerName
-
-For example:
-
-```javascript
-
-    window.WebViewJavascriptBridge.init(function(message, responseCallback) {
-        console.log('JS got a message', message);
-        var data = {
-            'Javascript Responds': 'Wee!'
-        };
-        console.log('JS responding with', data);
-        responseCallback(data);
-    });
-
-```
-
-```java
-    webView.send("hello");
-```
-
-will print 'JS got a message hello' and 'JS responding with' in webview console.
-
-### Persistent Callbacks (New Feature)
-
-By default, callbacks are deleted after first use. However, you can now use persistent callbacks that can be reused multiple times:
-
-#### Java Side
-
-```java
-// Use persistent callback that won't be deleted after first use
+// Java: callback survives multiple invocations
 webView.callHandlerPersistent("functionInJs", data, new OnBridgeCallback() {
     @Override
     public void onCallBack(String data) {
-        // This callback can be called multiple times
-        Log.d(TAG, "Persistent callback called: " + data);
+        Log.d(TAG, "called again: " + data);  // can be called multiple times
     }
 });
 ```
 
-#### JavaScript Side
+### Domain Whitelist (Security)
 
-```javascript
-// Use persistent callback
-WebViewJavascriptBridge.callHandlerPersistent("javaHandler", data, function(response) {
-    // This callback can be reused multiple times
-    console.log("Persistent callback response: " + response);
-});
+Restrict which origins can call native methods through the bridge. When a whitelist is set, only pages from allowed hosts can invoke `@JavascriptInterface` methods:
 
-// Register and manually manage persistent callbacks
-var callbackId = "my_persistent_callback";
-WebViewJavascriptBridge.registerPersistentCallback(callbackId, function(data) {
-    console.log("Persistent callback called: " + data);
-});
-
-// Remove persistent callback when no longer needed
-WebViewJavascriptBridge.removePersistentCallback(callbackId);
-```
-
-This feature is useful when you need to maintain a long-term communication channel between Java and JavaScript, such as for real-time updates or event notifications.
-
-### Switch to CustomWebView
-* activity_main.xml
-```xml
-    <com.github.lzyzsd.jsbridge.example.CustomWebView
-        android:id="@+id/webView"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent" >
-     </com.github.lzyzsd.jsbridge.example.CustomWebView>
-```
-* MainActivity.java
-Change BridgeWebView class to CustomWebView:
 ```java
-    CustomWebView webView = (CustomWebView) findViewById(R.id.webView);
-    
+// Only allow your own domains
+webView.addAllowedHost("example.com");
+webView.addAllowedHost("*.example.com");  // wildcard for subdomains
+
+// Or set all at once
+Set<String> hosts = new HashSet<>(Arrays.asList("app.com", "*.app.com"));
+webView.setAllowedHosts(hosts);
+
+// Or use BridgeConfig for full control
+BridgeConfig config = new BridgeConfig();
+config.addAllowedHost("example.com");
+webView.setBridgeConfig(config);
 ```
 
-## Notice
+When the whitelist is empty (default), all origins are allowed — fully backward compatible.
 
-This library will inject a WebViewJavascriptBridge Object to the window object.
-You can listen to the `WebViewJavascriptBridgeReady` event to ensure `window.WebViewJavascriptBridge` exists, as the below code shows:
+---
 
-```javascript
+## BridgeHelper (Custom WebView Integration)
 
-    if (window.WebViewJavascriptBridge) {
-        //do your work here
-    } else {
-        document.addEventListener(
-            'WebViewJavascriptBridgeReady'
-            , function() {
-                //do your work here
-            },
-            false
-        );
+If you need JsBridge on a custom `WebView` (not `BridgeWebView`), use `BridgeHelper`:
+
+### Step 1: Implement `IWebView`
+
+```java
+public class CustomWebView extends WebView implements WebViewJavascriptBridge, IWebView {
+
+    private BridgeHelper bridgeHelper;
+
+    public CustomWebView(Context context) {
+        super(context);
+        init();
     }
 
-```
+    private void init() {
+        getSettings().setJavaScriptEnabled(true);
+        bridgeHelper = new BridgeHelper(this);
 
-Or put all JsBridge function call into `window.WVJBCallbacks` array if `window.WebViewJavascriptBridge` is undefined, this task queue will be flushed when `WebViewJavascriptBridgeReady` event triggered.
+        setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                super.onPageStarted(view, url, favicon);
+                bridgeHelper.onPageStarted();  // reset JS injection state
+            }
 
-Copy and paste setupWebViewJavascriptBridge into your JS:
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                bridgeHelper.onPageFinished();  // inject bridge JS + flush queue
+            }
 
-```javascript
-function setupWebViewJavascriptBridge(callback) {
-	if (window.WebViewJavascriptBridge) {
-        return callback(WebViewJavascriptBridge);
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                return bridgeHelper.shouldOverrideUrlLoading(url);
+            }
+        });
     }
-	if (window.WVJBCallbacks) {
-        return window.WVJBCallbacks.push(callback);
+
+    // Delegate bridge methods
+    @Override
+    public void sendToWeb(String data, OnBridgeCallback responseCallback) {
+        bridgeHelper.sendToWeb(data, responseCallback);
     }
-	window.WVJBCallbacks = [callback];
+
+    public void callHandler(String handlerName, String data, OnBridgeCallback callBack) {
+        bridgeHelper.callHandler(handlerName, data, callBack);
+    }
+
+    public void registerHandler(String handlerName, BridgeHandler handler) {
+        bridgeHelper.registerHandler(handlerName, handler);
+    }
+
+    // ... other WebViewJavascriptBridge methods
+
+    @Override
+    public WebView getWebView() { return this; }
 }
 ```
 
-Call `setupWebViewJavascriptBridge` and then use the bridge to register handlers or call Java handlers:
+### Step 2: Use domain whitelist with BridgeHelper
+
+```java
+CustomWebView webView = findViewById(R.id.webView);
+webView.bridgeHelper.addAllowedHost("example.com");
+```
+
+---
+
+## JavaScript Setup
+
+The bridge JS is injected automatically on page load. Wait for it:
 
 ```javascript
+function setupWebViewJavascriptBridge(callback) {
+    if (window.WebViewJavascriptBridge) {
+        return callback(WebViewJavascriptBridge);
+    }
+    if (window.WVJBCallbacks) {
+        return window.WVJBCallbacks.push(callback);
+    }
+    window.WVJBCallbacks = [callback];
+}
+
+// Usage
 setupWebViewJavascriptBridge(function(bridge) {
-	bridge.registerHandler('JS Echo', function(data, responseCallback) {
-		console.log("JS Echo called with:", data);
-		responseCallback(data);
+    bridge.registerHandler('JS Echo', function(data, responseCallback) {
+        console.log("JS Echo called with:", data);
+        responseCallback(data);
     });
-	bridge.callHandler('ObjC Echo', {'key':'value'}, function(responseData) {
-		console.log("JS received response:", responseData);
-	});
 });
 ```
 
-It's the same as [WebViewJavascriptBridge](https://github.com/marcuswestin/WebViewJavascriptBridge), which makes it easier for you to define the same behavior across different platforms between Android and iOS, while writing concise code.
+Or listen for the ready event:
+
+```javascript
+if (window.WebViewJavascriptBridge) {
+    // bridge is ready
+} else {
+    document.addEventListener('WebViewJavascriptBridgeReady', function() {
+        // bridge is now ready
+    }, false);
+}
+```
+
+---
+
+<a id="中文文档"></a>
+
+## 中文文档
+
+### 安装
+
+```groovy
+// settings.gradle 或 build.gradle (项目级)
+repositories {
+    maven { url "https://jitpack.io" }
+}
+
+// build.gradle (模块级)
+dependencies {
+    implementation 'com.github.happydog-intj:JsBridge:v2.1.0'
+}
+```
+
+### 快速开始 (BridgeWebView)
+
+在布局中添加 `BridgeWebView`：
+
+```xml
+<com.github.lzyzsd.jsbridge.BridgeWebView
+    android:id="@+id/webView"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent" />
+```
+
+在 Activity 中初始化：
+
+```java
+BridgeWebView webView = findViewById(R.id.webView);
+webView.setGson(new Gson());
+
+// 注册 @JavascriptInterface
+webView.addJavascriptInterface(
+    new MainJavascriptInterface(
+        webView.getCallbacks(),
+        webView.getPersistentCallbacks(),
+        webView),
+    "WebViewJavascriptBridge");
+
+webView.loadUrl("file:///android_asset/demo.html");
+```
+
+### Java 调用 JavaScript
+
+先在 JS 端注册 handler，然后 Java 端调用：
+
+```javascript
+// JS 端: 注册 handler
+WebViewJavascriptBridge.registerHandler("functionInJs", function(data, responseCallback) {
+    console.log("收到 Java 数据: " + data);
+    responseCallback("来自 JS 的响应");
+});
+```
+
+```java
+// Java 端: 调用 JS handler
+webView.callHandler("functionInJs", "来自Java的数据", new OnBridgeCallback() {
+    @Override
+    public void onCallBack(String data) {
+        Log.d(TAG, "JS 响应: " + data);
+    }
+});
+```
+
+### JavaScript 调用 Java
+
+创建 `@JavascriptInterface` 类，JS 端即可调用：
+
+```java
+// Java 端: 自定义 JavascriptInterface
+public class MainJavascriptInterface extends BridgeWebView.BaseJavascriptInterface {
+
+    private WebViewJavascriptBridge mWebView;
+
+    public MainJavascriptInterface(Map<String, OnBridgeCallback> callbacks,
+                                   Map<String, OnBridgeCallback> persistentCallbacks,
+                                   WebViewJavascriptBridge webView) {
+        super(callbacks, persistentCallbacks);
+        mWebView = webView;
+    }
+
+    @Override
+    public String send(String data) {
+        return "默认响应";
+    }
+
+    @JavascriptInterface
+    public void submitFromWeb(String data, String callbackId) {
+        Log.d("JSInterface", "收到 Web 数据: " + data);
+        mWebView.responseFromWeb("来自 Java 的响应", callbackId);
+    }
+}
+```
+
+```javascript
+// JS 端: 调用 Java handler
+WebViewJavascriptBridge.callHandler(
+    'submitFromWeb',
+    {'param': 'value'},
+    function(responseData) {
+        console.log("收到 Java 响应: " + responseData);
+    }
+);
+```
+
+### 持久化回调
+
+默认回调在首次调用后自动删除。使用持久化回调实现多次响应（如实时更新、事件流）：
+
+```java
+// Java 端: 回调不会在首次调用后删除
+webView.callHandlerPersistent("functionInJs", data, new OnBridgeCallback() {
+    @Override
+    public void onCallBack(String data) {
+        Log.d(TAG, "再次收到: " + data);  // 可被多次调用
+    }
+});
+```
+
+### 域名白名单（安全特性）
+
+限制哪些域名可以通过 bridge 调用 native 方法。设置白名单后，只有允许的域名才能调用 `@JavascriptInterface`：
+
+```java
+// 只允许自己的域名
+webView.addAllowedHost("example.com");
+webView.addAllowedHost("*.example.com");  // 支持通配符匹配子域名
+
+// 或者一次性设置
+Set<String> hosts = new HashSet<>(Arrays.asList("app.com", "*.app.com"));
+webView.setAllowedHosts(hosts);
+```
+
+白名单为空时（默认），所有域名均允许 —— 完全向后兼容。
+
+### 使用 BridgeHelper 自定义 WebView
+
+如果你需要在自定义 WebView 上使用 JsBridge（而非直接使用 `BridgeWebView`），可以用 `BridgeHelper`：
+
+```java
+public class CustomWebView extends WebView implements WebViewJavascriptBridge, IWebView {
+
+    private BridgeHelper bridgeHelper;
+
+    public CustomWebView(Context context) {
+        super(context);
+        init();
+    }
+
+    private void init() {
+        getSettings().setJavaScriptEnabled(true);
+        bridgeHelper = new BridgeHelper(this);
+
+        setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                super.onPageStarted(view, url, favicon);
+                bridgeHelper.onPageStarted();  // 重置注入状态
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                bridgeHelper.onPageFinished();  // 注入 bridge JS + flush 消息队列
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                return bridgeHelper.shouldOverrideUrlLoading(url);
+            }
+        });
+    }
+
+    // 委托 bridge 方法到 bridgeHelper
+    public void callHandler(String handlerName, String data, OnBridgeCallback cb) {
+        bridgeHelper.callHandler(handlerName, data, cb);
+    }
+
+    public void registerHandler(String handlerName, BridgeHandler handler) {
+        bridgeHelper.registerHandler(handlerName, handler);
+    }
+
+    @Override
+    public WebView getWebView() { return this; }
+
+    // ... 其他 WebViewJavascriptBridge 接口方法
+}
+```
+
+**关键要点：**
+- `onPageStarted()` 中调用 `bridgeHelper.onPageStarted()` 重置注入状态
+- `onPageFinished()` 中调用 `bridgeHelper.onPageFinished()` 注入 JS 并 flush 队列
+- `shouldOverrideUrlLoading()` 中调用 `bridgeHelper.shouldOverrideUrlLoading(url)` 拦截 bridge URL
+
+### JS 端设置
+
+Bridge JS 会在页面加载完成后自动注入。使用以下方式等待 bridge 就绪：
+
+```javascript
+function setupWebViewJavascriptBridge(callback) {
+    if (window.WebViewJavascriptBridge) {
+        return callback(WebViewJavascriptBridge);
+    }
+    if (window.WVJBCallbacks) {
+        return window.WVJBCallbacks.push(callback);
+    }
+    window.WVJBCallbacks = [callback];
+}
+
+// 使用
+setupWebViewJavascriptBridge(function(bridge) {
+    bridge.registerHandler('myHandler', function(data, responseCallback) {
+        console.log("收到数据:", data);
+        responseCallback("处理完成");
+    });
+});
+```
+
+### 通信通道
+
+JsBridge 支持 4 种通信通道（参见架构图）：
+
+| # | 通道 | 方向 | 说明 |
+|---|------|------|------|
+| ① | URL Scheme 拦截 | JS → Java | JS 通过 iframe 触发 `yy://` scheme，Java 端 `shouldOverrideUrlLoading` 拦截 |
+| ② | @JavascriptInterface | JS → Java | JS 直接调用 Java 注册的 `@JavascriptInterface` 方法（API 17+） |
+| ③ | evaluateJavascript() | Java → JS | Java 调用 `evaluateJavascript()` 执行 JS 代码（API 19+） |
+| ④ | loadUrl("javascript:") | Java → JS | 低版本兼容方案，通过 `loadUrl` 执行 JS |
+
+### JS 注入生命周期
+
+```
+onPageStarted → 状态重置为 NOT_LOADED，消息队列恢复
+                     ↓
+onPageFinished → 注入 bridge JS (evaluateJavascript)
+                     ↓  状态: LOADING
+              注入完成回调 → 状态: LOADED，flush 消息队列
+```
+
+在 JS 注入完成前发送的消息会自动排队，注入完成后统一派发 —— 不再丢消息。
+
+---
+
+## v2.1.0 Changelog
+
+### Bug Fixes
+- **#175**: 修复 URL decode 破坏非 bridge URL 查询参数（如支付宝 deep link）
+- **#265**: 修复消息队列在错误时机被清除
+- **#209**: 修复 init 后不能立即调用 JS 方法
+- **#250**: 修复频繁发消息导致 Throttling navigation 报错
+- **#170**: 修复初始化时消息偶发性丢失
+- **#271**: 修复 CustomWebView (BridgeHelper) 生命周期管理
+
+### New Features
+- 持久化回调: `callHandlerPersistent()`
+- 域名白名单: `BridgeConfig` + `addAllowedHost()`
+- 统一消息模型: `Message.createRequest()` / `createResponse()`
+- JS 注入状态机: `NOT_LOADED → LOADING → LOADED`
+- 使用 `evaluateJavascript()` + 回调确认注入完成
+
+### Build
+- **#275**: 修复 duplicate class，仅发布 release AAR
+- 版本号: 2.1.0
 
 ## License
 
