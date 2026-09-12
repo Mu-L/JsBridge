@@ -227,4 +227,48 @@ public class MessageTest {
         assertEquals("rId", m.getResponseId());
         assertEquals("rData", m.getResponseData());
     }
+
+    // --- Round-trip serialization ---
+
+    @Test
+    public void testToJson_roundTrip_request() {
+        Message original = Message.createRequest("myHandler", "payload123", "cb_42");
+        String json = original.toJson();
+        Message parsed = new Gson().fromJson(json, Message.class);
+
+        assertEquals(original.getHandlerName(), parsed.getHandlerName());
+        assertEquals(original.getData(), parsed.getData());
+        assertEquals(original.getCallbackId(), parsed.getCallbackId());
+        assertNull(parsed.getResponseId());
+        assertNull(parsed.getResponseData());
+    }
+
+    @Test
+    public void testToJson_roundTrip_response() {
+        Message original = Message.createResponse("resp_99", "{\"status\":\"ok\"}");
+        String json = original.toJson();
+        Message parsed = new Gson().fromJson(json, Message.class);
+
+        assertEquals(original.getResponseId(), parsed.getResponseId());
+        assertEquals(original.getResponseData(), parsed.getResponseData());
+        assertNull(parsed.getHandlerName());
+        assertNull(parsed.getData());
+        assertNull(parsed.getCallbackId());
+    }
+
+    // --- toArrayList edge cases ---
+
+    @Test
+    public void testToArrayList_nullInput() {
+        // Gson.fromJson(null, type) returns null
+        List<Message> result = Message.toArrayList(null);
+        assertNull(result);
+    }
+
+    @Test
+    public void testToArrayList_emptyStringInput() {
+        // Gson.fromJson("", type) returns null
+        List<Message> result = Message.toArrayList("");
+        assertNull(result);
+    }
 }

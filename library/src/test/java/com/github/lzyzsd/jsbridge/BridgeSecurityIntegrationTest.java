@@ -283,4 +283,32 @@ public class BridgeSecurityIntegrationTest {
         assertEquals("Send should be blocked when webView is null", 0, iface.sendCount);
         assertEquals("", result);
     }
+
+    // ---- Wildcard host integration ----
+
+    @Test
+    public void testWildcardHost_subdomainSendSucceeds() {
+        BridgeConfig config = new BridgeConfig();
+        config.addAllowedHost("*.example.com");
+        setWebViewUrl("https://api.example.com/v1/data");
+
+        TestJavascriptInterface iface = new TestJavascriptInterface(
+                callbacks, persistentCallbacks, config, webView);
+        String result = iface.send("hello", "cb1");
+        assertEquals("Wildcard subdomain should allow send", 1, iface.sendCount);
+        assertEquals("ok", result);
+    }
+
+    @Test
+    public void testWildcardHost_wrongDomainBlocked() {
+        BridgeConfig config = new BridgeConfig();
+        config.addAllowedHost("*.example.com");
+        setWebViewUrl("https://evil.com/page");
+
+        TestJavascriptInterface iface = new TestJavascriptInterface(
+                callbacks, persistentCallbacks, config, webView);
+        String result = iface.send("payload", "cb1");
+        assertEquals("Non-matching domain should be blocked", 0, iface.sendCount);
+        assertEquals("", result);
+    }
 }

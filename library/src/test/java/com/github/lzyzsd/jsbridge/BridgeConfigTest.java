@@ -207,4 +207,40 @@ public class BridgeConfigTest {
         assertEquals(1, config.getAllowedHosts().size());
         assertTrue(config.isUrlAllowed("https://example.com"));
     }
+
+    // ---- Port handling ----
+
+    @Test
+    public void testPortInUrl_matchesHostWithoutPort() {
+        // URI host extraction strips the port — "example.com:8080" → host "example.com"
+        config.addAllowedHost("example.com");
+        assertTrue("URL with non-standard port should match host",
+                config.isUrlAllowed("https://example.com:8080/page"));
+        assertTrue("URL with standard port should match host",
+                config.isUrlAllowed("https://example.com:443/page"));
+    }
+
+    // ---- Subdomain exact match ----
+
+    @Test
+    public void testSubdomainExactMatch_onlyMatchesExact() {
+        config.addAllowedHost("sub.example.com");
+        assertTrue("Exact subdomain should match",
+                config.isUrlAllowed("https://sub.example.com/page"));
+        assertFalse("Different subdomain should NOT match",
+                config.isUrlAllowed("https://other.example.com/page"));
+        assertFalse("Base domain should NOT match with subdomain-only config",
+                config.isUrlAllowed("https://example.com/page"));
+    }
+
+    // ---- Empty string host ----
+
+    @Test
+    public void testEmptyStringHost_isIgnoredAsPattern() {
+        config.addAllowedHost("");
+        // An empty string in the set should not accidentally match everything
+        // It will match hosts that are also empty, but real URLs always have a non-empty host
+        assertFalse("Empty host should not match real URLs",
+                config.isUrlAllowed("https://example.com/page"));
+    }
 }

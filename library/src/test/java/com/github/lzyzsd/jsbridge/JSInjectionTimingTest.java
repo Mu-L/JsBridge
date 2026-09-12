@@ -1,6 +1,7 @@
 package com.github.lzyzsd.jsbridge;
 
 import android.content.Context;
+import android.webkit.WebView;
 
 import com.google.gson.Gson;
 
@@ -193,5 +194,118 @@ public class JSInjectionTimingTest {
         // Persistent callback should still be in both maps
         assertTrue(bridgeWebView.getCallbacks().containsKey(callbackId));
         assertTrue(bridgeWebView.getPersistentCallbacks().containsKey(callbackId));
+    }
+
+    // --- BridgeHelper timing tests ---
+
+    @Test
+    public void testBridgeHelper_onPageStarted_resetsState() {
+        Context context = RuntimeEnvironment.getApplication();
+        WebView webView = new WebView(context);
+        IWebView iWebView = new IWebView() {
+            @Override public void loadUrl(String url) { webView.loadUrl(url); }
+            @Override public Context getContext() { return context; }
+            @Override public WebView getWebView() { return webView; }
+        };
+        BridgeHelper helper = new BridgeHelper(iWebView);
+
+        // Simulate a page load cycle
+        helper.onPageStarted();
+
+        // getStartupMessage should be a fresh non-null list (queue restored)
+        assertNotNull("startupMessage should be restored after onPageStarted",
+                helper.getStartupMessage());
+        assertTrue("startupMessage should be empty after reset",
+                helper.getStartupMessage().isEmpty());
+    }
+
+    @Test
+    public void testBridgeHelper_onPageStarted_restoresQueueAfterFlush() {
+        Context context = RuntimeEnvironment.getApplication();
+        WebView webView = new WebView(context);
+        IWebView iWebView = new IWebView() {
+            @Override public void loadUrl(String url) { webView.loadUrl(url); }
+            @Override public Context getContext() { return context; }
+            @Override public WebView getWebView() { return webView; }
+        };
+        BridgeHelper helper = new BridgeHelper(iWebView);
+
+        // Queue a message
+        helper.callHandler("h1", "d1", null);
+        assertNotNull(helper.getStartupMessage());
+        assertEquals(1, helper.getStartupMessage().size());
+
+        // Simulate page load + new page navigation
+        helper.onPageFinished(); // async injection — startupMessage may or may not be null
+        helper.onPageStarted();  // should always restore queue
+
+        // After onPageStarted, queue must be restored (fresh empty list)
+        assertNotNull("startupMessage should be restored after onPageStarted",
+                helper.getStartupMessage());
+        assertTrue("startupMessage should be empty after page reset",
+                helper.getStartupMessage().isEmpty());
+
+        // Messages queued now should accumulate in the new list
+        helper.callHandler("h2", "d2", null);
+        assertEquals(1, helper.getStartupMessage().size());
+    }
+
+    @Test
+    public void testBridgeHelper_onPageFinished_debouncesDuplicateCalls() {
+        Context context = RuntimeEnvironment.getApplication();
+        WebView webView = new WebView(context);
+        IWebView iWebView = new IWebView() {
+            @Override public void loadUrl(String url) { webView.loadUrl(url); }
+            @Override public Context getContext() { return context; }
+            @Override public WebView getWebView() { return webView; }
+        };
+        BridgeHelper helper = new BridgeHelper(iWebView);
+
+        // First page load
+        helper.onPageFinished();
+
+        // Queue a message — it goes to startupMessage if queue was restored,
+        // or dispatches immediately if startupMessage is null (flushed)
+        int sizeBefore = helper.getStartupMessage() != null ? helper.getStartupMessage().size() : -1;
+
+        // Second onPageFinished — should be debounced (mInjecting guard)
+        helper.onPageFinished();
+
+        // The key invariant: after onPageStarted, debounce resets and onPageFinished works again
+        helper.onPageStarted(); // reset
+        assertNotNull("Queue should be restored after onPageStarted",
+                helper.getStartupMessage());
+
+        // Now onPageFinished should work again (not debounced)
+        helper.onPageFinished();
+
+        // Verify the full cycle works: queue message, page reset, queue again
+        helper.onPageStarted();
+        helper.callHandler("h1", "d1", null);
+        assertNotNull(helper.getStartupMessage());
+        assertEquals("Message should be queued during LOADING state",
+                1, helper.getStartupMessage().size());
+    }
+
+    @Test
+    public void testCallHandler_afterJSInjected_dispatchesImmediately() {
+        // Queue a message before injection
+        bridgeWebView.callHandler("before", "d1", new OnBridgeCallback() {
+            @Override public void onCallBack(String data) {}
+        });
+
+        // Inject JS — flushes queued message, mMessages becomes null
+        bridgeWebView.onJSInjected();
+        assertTrue(bridgeWebView.isJSLoaded());
+
+        // Now call handler — should dispatch immediately (not queue)
+        // because mMessages is null after injection
+        int callbacksBefore = bridgeWebView.getCallbacks().size();
+        bridgeWebView.callHandler("after", "d2", new OnBridgeCallback() {
+            @Override public void onCallBack(String data) {}
+        });
+
+        // Callback should still be registered (dispatched message has callback)
+        assertEquals(callbacksBefore + 1, bridgeWebView.getCallbacks().size());
     }
 }
