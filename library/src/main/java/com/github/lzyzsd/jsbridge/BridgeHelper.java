@@ -282,15 +282,17 @@ public class BridgeHelper implements WebViewJavascriptBridge {
 
     // P1-3: Origin check in URL interception
     public boolean shouldOverrideUrlLoading(String url) {
-        try {
-            String replacedUrl = url.replaceAll("%(?![0-9a-fA-F]{2})", "%25").replaceAll("\\+", "%2B");
-            url = URLDecoder.decode(replacedUrl, "UTF-8");
-        } catch (UnsupportedEncodingException e) {
-            Log.w(TAG, e);
-        }
-
+        // Check the raw URL prefix first — bridge URLs (yy://) are never percent-encoded.
+        // Decoding non-bridge URLs can corrupt query parameters (issue #175).
         if (url.startsWith(BridgeUtil.YY_RETURN_DATA)) {
             if (!isOriginAllowed()) return true; // block silently
+            // Decode only the bridge URL for data extraction
+            try {
+                String replacedUrl = url.replaceAll("%(?![0-9a-fA-F]{2})", "%25").replaceAll("\\+", "%2B");
+                url = URLDecoder.decode(replacedUrl, "UTF-8");
+            } catch (UnsupportedEncodingException e) {
+                Log.w(TAG, e);
+            }
             handlerReturnData(url);
             return true;
         } else if (url.startsWith(BridgeUtil.YY_OVERRIDE_SCHEMA)) {

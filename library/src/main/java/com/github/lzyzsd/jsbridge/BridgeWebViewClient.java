@@ -5,7 +5,6 @@ import android.net.http.SslError;
 import android.os.Build;
 import androidx.annotation.Nullable;
 
-import android.util.Log;
 import android.view.KeyEvent;
 import android.webkit.ClientCertRequest;
 import android.webkit.HttpAuthHandler;
@@ -19,8 +18,6 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
-import java.io.UnsupportedEncodingException;
-import java.net.URLDecoder;
 
 /**
  * 如果要自定义WebViewClient必须要集成此类
@@ -71,15 +68,12 @@ class BridgeWebViewClient extends WebViewClient {
     }
 
     private boolean interceptUrl(String url) {
-        try {
-            url = URLDecoder.decode(url, "UTF-8");
-        } catch (UnsupportedEncodingException e) {
-            e.printStackTrace();
-        }
-        Log.i(TAG, "shouldOverrideUrlLoading, url = " + url);
-        if (url.startsWith(BridgeUtil.YY_RETURN_DATA)) { // 如果是返回数据
+        // Only check the raw URL prefix — bridge URLs (yy://) are never percent-encoded,
+        // so there is no need to decode. Decoding non-bridge URLs can corrupt their query
+        // parameters (e.g. %3d → = changes parameter boundaries). See issue #175.
+        if (url.startsWith(BridgeUtil.YY_RETURN_DATA)) {
             return true;
-        } else if (url.startsWith(BridgeUtil.YY_OVERRIDE_SCHEMA)) { //
+        } else if (url.startsWith(BridgeUtil.YY_OVERRIDE_SCHEMA)) {
             return true;
         }
         return false;

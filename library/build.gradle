@@ -1,62 +1,74 @@
 apply plugin: 'com.android.library'
+apply plugin: 'maven-publish'
 
-version = "1.0.0"
+version = "2.1.0"
 
 android {
-    compileSdkVersion 28
-//    buildToolsVersion "25.0.3"
+    compileSdk 35
+    namespace "com.github.lzyzsd.library"
 
     defaultConfig {
-        minSdkVersion 17
-        targetSdkVersion 28
+        minSdk 17
+        targetSdk 33
         versionCode 1
         versionName version
     }
     buildTypes {
         release {
             minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
-    lintOptions { // 消除lint警告
+    buildFeatures {
+        buildConfig true
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+    lint {
         abortOnError false
         checkReleaseBuilds false
+    }
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+        }
+    }
+    // Fix #275: Only publish release variant to avoid duplicate class errors
+    publishing {
+        singleVariant("release") {
+            withSourcesJar()
+        }
     }
 }
 
 dependencies {
-    implementation 'androidx.appcompat:appcompat:1.0.2'
-    implementation 'com.google.code.gson:gson:2.8.5'
-    
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.code.gson:gson:2.10.1'
+
     // Test dependencies
     testImplementation 'junit:junit:4.13.2'
-    testImplementation 'org.mockito:mockito-core:3.12.4'
-    androidTestImplementation 'androidx.test.ext:junit:1.1.3'
-    androidTestImplementation 'androidx.test:core:1.4.0'
-    androidTestImplementation 'androidx.test:runner:1.4.0'
-    androidTestImplementation 'org.mockito:mockito-android:3.12.4'
+    testImplementation 'org.mockito:mockito-core:4.11.0'
+    testImplementation 'org.robolectric:robolectric:4.10.3'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test:core:1.5.0'
+    androidTestImplementation 'androidx.test:runner:1.5.2'
+    androidTestImplementation 'org.mockito:mockito-android:4.11.0'
 }
 
-
-def siteUrl = 'https://github.com/lzyzsd/JsBridge'
-def gitUrl = 'https://github.com/lzyzsd/JsBridge.git'
-// apply plugin: 'com.github.dcendents.android-maven'
 group = "com.github.lzyzsd.jsbridge"
-task sourcesJar(type: Jar) {
-    from android.sourceSets.main.java.srcDirs
-    classifier = 'sources'
+
+// Maven publication — only the release variant (fixes #275 duplicate class)
+afterEvaluate {
+    publishing {
+        publications {
+            release(MavenPublication) {
+                from components.release
+                groupId = "com.github.lzyzsd.jsbridge"
+                artifactId = "library"
+                version = project.version
+            }
+        }
+    }
 }
-task javadoc(type: Javadoc) {
-    source = android.sourceSets.main.java.srcDirs
-    classpath += project.files(android.getBootClasspath().join(File.pathSeparator))
-}
-task javadocJar(type: Jar, dependsOn: javadoc) {
-    classifier = 'javadoc'
-    from javadoc.destinationDir
-}
-artifacts {
-    archives javadocJar
-    archives sourcesJar
-}
-Properties properties = new Properties()
-properties.load(project.rootProject.file('local.properties').newDataInputStream())
