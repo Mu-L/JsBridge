@@ -62,12 +62,19 @@ public class BridgeWebView extends WebView implements WebViewJavascriptBridge, B
         init();
     }
 
+    @SuppressWarnings("deprecation") // Intentionally set for consistent security across all API levels
     private void init() {
-        clearCache(true);
-        getSettings().setUseWideViewPort(true);
-        getSettings().setCacheMode(WebSettings.LOAD_NO_CACHE);
-        getSettings().setJavaScriptEnabled(true);
-        getSettings().setJavaScriptCanOpenWindowsAutomatically(true);
+        WebSettings settings = getSettings();
+        settings.setUseWideViewPort(true);
+        settings.setJavaScriptEnabled(true);
+        settings.setJavaScriptCanOpenWindowsAutomatically(true);
+        settings.setDomStorageEnabled(true);
+
+        // Security: disable file access from file:// URLs (default changed in API 30,
+        // explicitly set for consistent behavior across all API levels)
+        settings.setAllowFileAccessFromFileURLs(false);
+        settings.setAllowUniversalAccessFromFileURLs(false);
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT && BuildConfig.DEBUG) {
             WebView.setWebContentsDebuggingEnabled(true);
         }

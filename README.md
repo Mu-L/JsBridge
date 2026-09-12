@@ -511,6 +511,38 @@ onPageFinished → 注入 bridge JS (evaluateJavascript)
 
 ---
 
+## Compatibility / 兼容性
+
+### Android 11+ (API 30+)
+
+JsBridge v2.1.0 已适配 Android 11+：
+
+- `setAllowFileAccessFromFileURLs(false)` / `setAllowUniversalAccessFromFileURLs(false)` 默认关闭（与 API 30+ 行为一致）
+- 如果你的页面通过 `file://` 加载且需要跨文件访问，请在初始化后手动开启：
+
+```java
+webView.getSettings().setAllowFileAccessFromFileURLs(true);
+```
+
+- `clearCache(true)` 和 `LOAD_NO_CACHE` 已从默认 `init()` 移除 —— 缓存策略应由宿主 App 决定
+- `setDomStorageEnabled(true)` 默认开启
+
+### HarmonyOS / 鸿蒙
+
+本项目为 Android 平台库。HarmonyOS 版本请参考社区移植：
+
+- **ohpm**: [`@alvin917/jsbridge`](https://ohpm.openharmony.cn/#/cn/detail/@alvin917%2Fjsbridge)
+
+### WebView 创建崩溃 (rk3568 等嵌入式设备)
+
+如果遇到 `WebViewFactory` / `InflateException` 错误，通常是设备的 WebView 提供程序未正确安装或版本过低（常见于 Rockchip 等嵌入式开发板）。这不是 JsBridge 的问题，解决方法：
+
+1. 在设备上安装/更新 Chrome 或 Android System WebView
+2. 确认 `adb shell dumpsys webviewupdate` 输出正常
+3. 嵌入式设备需要系统集成商预装 WebView APK
+
+---
+
 ## v2.1.0 Changelog
 
 ### Bug Fixes
@@ -527,6 +559,11 @@ onPageFinished → 注入 bridge JS (evaluateJavascript)
 - 统一消息模型: `Message.createRequest()` / `createResponse()`
 - JS 注入状态机: `NOT_LOADED → LOADING → LOADED`
 - 使用 `evaluateJavascript()` + 回调确认注入完成
+
+### Security / Compatibility
+- 移除 `init()` 中的 `clearCache(true)` 和 `LOAD_NO_CACHE`（不再强制清除应用缓存）
+- 默认禁用 `setAllowFileAccessFromFileURLs` / `setAllowUniversalAccessFromFileURLs`（Android 11+ 安全加固）
+- 默认启用 `setDomStorageEnabled(true)`
 
 ### Build
 - **#275**: 修复 duplicate class，仅发布 release AAR
